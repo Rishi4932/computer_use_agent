@@ -6,12 +6,14 @@ from intelligence.recovery import RecoveryEngine
 
 class AgentExecutor:
     """
-    Executes actions with verification and controlled recovery.
+    Executes actions through VerifiedActionExecutor and uses RecoveryEngine
+    when an action or its verification fails.
 
-    Important:
-    - If an action itself failed, recovery may retry it.
-    - If an action succeeded but verification failed, we do NOT blindly
-      repeat non-idempotent actions such as typing.
+    The executor supports both:
+    1. The real VerifiedActionExecutor result format containing
+       'action_result' and 'verification'.
+    2. The simpler mocked/test result format containing
+       'success' and 'verification'.
     """
 
     NON_IDEMPOTENT_ACTIONS = {
@@ -60,22 +62,43 @@ class AgentExecutor:
                     "message": "Executor returned no result.",
                 }
 
+            # ---------------------------------------------------------
+            # Extract action execution result.
+            #
+            # Real executor:
+            # {
+            #     "action_result": ActionResult(...),
+            #     "verification": VerificationResult(...)
+            # }
+            #
+            # Tests/mocks may use:
+            # {
+            #     "success": True/False,
+            #     "verification": ...
+            # }
+            # ---------------------------------------------------------
+
             action_result = result.get("action_result")
             verification = result.get("verification")
 
-            action_succeeded = (
-                action_result is not None
-                and getattr(action_result, "success", False)
-            )
+            if action_result is not None:
+                action_succeeded = bool(
+                    getattr(action_result, "success", False)
+                )
+            else:
+                action_succeeded = bool(
+                    result.get("success", False)
+                )
 
             verification_succeeded = (
                 verification is not None
-                and getattr(verification, "success", False)
+                and bool(getattr(verification, "success", False))
             )
 
             # ---------------------------------------------------------
             # SUCCESS
             # ---------------------------------------------------------
+
             if action_succeeded and verification_succeeded:
 
                 history.append(
@@ -86,7 +109,10 @@ class AgentExecutor:
                         "message": getattr(
                             verification,
                             "reason",
-                            "Action verified successfully.",
+                            result.get(
+                                "message",
+                                "Action verified successfully.",
+                            ),
                         ),
                     }
                 )
@@ -100,27 +126,33 @@ class AgentExecutor:
                 }
 
             # ---------------------------------------------------------
-            # ACTION FAILED
+            # ACTION EXECUTION FAILED
             # ---------------------------------------------------------
+
             if not action_succeeded:
+
+                failure_message = getattr(
+                    action_result,
+                    "message",
+                    result.get(
+                        "message",
+                        "Action execution failed.",
+                    ),
+                )
 
                 history.append(
                     {
                         "attempt": attempt,
                         "action": current_action,
                         "success": False,
-                        "message": getattr(
-                            action_result,
-                            "message",
-                            "Action execution failed.",
-                        ),
+                        "message": failure_message,
                     }
                 )
 
                 recovery = self.recovery_engine.decide(
                     action=current_action,
                     verification=verification,
-                    attempt=attempt,
+                    attempt_number=attempt,
                 )
 
                 if not recovery.should_retry:
@@ -137,22 +169,18 @@ class AgentExecutor:
                 history[-1]["recovery"] = recovery.to_dict()
 
                 current_action = dict(
-                    recovery.modified_action or current_action
+                    recovery.modified_action
+                    or current_action
                 )
 
                 continue
 
             # ---------------------------------------------------------
             # ACTION SUCCEEDED BUT VERIFICATION FAILED
-            # ---------------------------------------------------------
             #
-            # This is the critical fix.
-            #
-            # Typing is non-idempotent. If pyautogui successfully typed
-            # the text but OCR failed to detect it, repeating the action
-            # creates duplicate text.
-            #
-            # Therefore STOP here instead of typing again.
+            # Important:
+            # Do NOT blindly repeat non-idempotent actions such as
+            # typing because that could duplicate their effect.
             # ---------------------------------------------------------
 
             if (
@@ -168,9 +196,9 @@ class AgentExecutor:
                         "action": current_action,
                         "success": False,
                         "message": (
-                            "Action executed successfully, but verification "
-                            "failed. Retry suppressed because the action is "
-                            "non-idempotent."
+                            "Action executed successfully, but "
+                            "verification failed. Retry suppressed "
+                            "because the action is non-idempotent."
                         ),
                     }
                 )
@@ -185,15 +213,18 @@ class AgentExecutor:
                         "should_retry": False,
                         "strategy": "stop_after_action_success",
                         "reason": (
-                            "The action succeeded but verification failed. "
-                            "The action was not repeated because repeating "
-                            "a non-idempotent action could duplicate its effect."
+                            "The action succeeded but verification "
+                            "failed. The action was not repeated "
+                            "because repeating a non-idempotent "
+                            "action could duplicate its effect."
                         ),
                     },
                 }
 
             # ---------------------------------------------------------
-            # GENERIC VERIFICATION FAILURE
+            # ACTION SUCCEEDED BUT VERIFICATION FAILED
+            #
+            # For idempotent actions, recovery may retry.
             # ---------------------------------------------------------
 
             history.append(
@@ -204,7 +235,10 @@ class AgentExecutor:
                     "message": getattr(
                         verification,
                         "reason",
-                        "Verification failed.",
+                        result.get(
+                            "message",
+                            "Verification failed.",
+                        ),
                     ),
                 }
             )
@@ -212,7 +246,7 @@ class AgentExecutor:
             recovery = self.recovery_engine.decide(
                 action=current_action,
                 verification=verification,
-                attempt=attempt,
+                attempt_number=attempt,
             )
 
             if not recovery.should_retry:
@@ -229,5 +263,6 @@ class AgentExecutor:
             history[-1]["recovery"] = recovery.to_dict()
 
             current_action = dict(
-                recovery.modified_action or current_action
+                recovery.modified_action
+                or current_action
             )
