@@ -1,0 +1,8 @@
+pyautogui
+pillow
+opencv-python
+psutil
+pydantic
+python-dotenv
+pytesseract
+playwright

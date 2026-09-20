@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+
+data/screenshots/*
+data/logs/*
+data/database/*
+
+node_modules/
+dist/
+build/
+
+.pytest_cache/
+.vscode/
