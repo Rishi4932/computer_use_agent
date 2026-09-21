@@ -58,6 +58,10 @@ Available action types include:
 - type_into_control
 - get_control_text
 
+- uia_click_control
+- uia_invoke_control
+- uia_get_control_text
+
 - click
 - double_click
 - right_click

@@ -254,7 +254,7 @@ class ActionRouter:
                 )
 
             # =================================================
-            # Windows UI Automation
+            # Windows UI Automation - Existing path
             # =================================================
 
             if action_type == "open_application":
@@ -398,6 +398,185 @@ class ActionRouter:
                         "text": text
                     },
                     executor="windows_uia",
+                )
+
+            # =================================================
+            # Windows UI Automation - Fresh Raw UIA path
+            # =================================================
+
+            if action_type == "uia_click_control":
+
+                window_title = action.get(
+                    "window_title"
+                )
+
+                if not window_title:
+                    return ActionResult(
+                        success=False,
+                        action=action_type,
+                        message=(
+                            "window_title is required for "
+                            "uia_click_control."
+                        ),
+                        executor="windows_uia",
+                    )
+
+                control = self.windows_uia.click_by_window(
+                    window_title=window_title,
+                    title=action.get(
+                        "control_title"
+                    ),
+                    control_type=action.get(
+                        "control_type"
+                    ),
+                    auto_id=action.get(
+                        "auto_id"
+                    ),
+                )
+
+                return ActionResult(
+                    success=True,
+                    action=action_type,
+                    message=(
+                        "Native Windows UI control clicked "
+                        "using fresh UIA discovery."
+                    ),
+                    data={
+                        "control_name": getattr(
+                            control,
+                            "name",
+                            "",
+                        ),
+                        "control_type": getattr(
+                            control,
+                            "control_type",
+                            "",
+                        ),
+                        "automation_id": getattr(
+                            control,
+                            "automation_id",
+                            "",
+                        ),
+                        "window_title": window_title,
+                    },
+                    executor="windows_uia_raw",
+                )
+
+            if action_type == "uia_invoke_control":
+
+                window_title = action.get(
+                    "window_title"
+                )
+
+                if not window_title:
+                    return ActionResult(
+                        success=False,
+                        action=action_type,
+                        message=(
+                            "window_title is required for "
+                            "uia_invoke_control."
+                        ),
+                        executor="windows_uia",
+                    )
+
+                control = self.windows_uia.invoke_by_window(
+                    window_title=window_title,
+                    title=action.get(
+                        "control_title"
+                    ),
+                    control_type=action.get(
+                        "control_type"
+                    ),
+                    auto_id=action.get(
+                        "auto_id"
+                    ),
+                )
+
+                return ActionResult(
+                    success=True,
+                    action=action_type,
+                    message=(
+                        "Native Windows UI control invoked "
+                        "using fresh UIA discovery."
+                    ),
+                    data={
+                        "control_name": getattr(
+                            control,
+                            "name",
+                            "",
+                        ),
+                        "control_type": getattr(
+                            control,
+                            "control_type",
+                            "",
+                        ),
+                        "automation_id": getattr(
+                            control,
+                            "automation_id",
+                            "",
+                        ),
+                        "window_title": window_title,
+                    },
+                    executor="windows_uia_raw",
+                )
+
+            if action_type == "uia_get_control_text":
+
+                window_title = action.get(
+                    "window_title"
+                )
+
+                if not window_title:
+                    return ActionResult(
+                        success=False,
+                        action=action_type,
+                        message=(
+                            "window_title is required for "
+                            "uia_get_control_text."
+                        ),
+                        executor="windows_uia",
+                    )
+
+                window = self.windows_uia.find_raw_window(
+                    title=window_title
+                )
+
+                if window is None:
+                    return ActionResult(
+                        success=False,
+                        action=action_type,
+                        message=(
+                            f"Window '{window_title}' "
+                            "could not be found."
+                        ),
+                        executor="windows_uia_raw",
+                    )
+
+                text = self.windows_uia.get_raw_control_text(
+                    window=window,
+                    title=action.get(
+                        "control_title"
+                    ),
+                    control_type=action.get(
+                        "control_type"
+                    ),
+                    auto_id=action.get(
+                        "auto_id"
+                    ),
+                )
+
+                return ActionResult(
+                    success=True,
+                    action=action_type,
+                    message=(
+                        "Native Windows UI control text "
+                        "retrieved using fresh UIA discovery."
+                    ),
+                    data={
+                        "text": text,
+                        "window_title": window_title,
+                    },
+                    executor="windows_uia_raw",
                 )
 
             # =================================================

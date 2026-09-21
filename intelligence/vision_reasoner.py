@@ -8,23 +8,24 @@ from intelligence.element_classifier import ElementClassifier
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+
 @dataclass
 class VisualElement:
-    """
-    Represents an element detected on the screen.
-    """
-
     element_type: str
     text: str = ""
+
     x: Optional[int] = None
     y: Optional[int] = None
     width: Optional[int] = None
     height: Optional[int] = None
+
     confidence: float = 0.0
     source: str = "unknown"
 
-    def to_dict(self) -> Dict[str, Any]:
+    control_type: Optional[str] = None
+    auto_id: Optional[str] = None
 
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "element_type": self.element_type,
             "text": self.text,
@@ -34,16 +35,13 @@ class VisualElement:
             "height": self.height,
             "confidence": self.confidence,
             "source": self.source,
+            "control_type": self.control_type,
+            "auto_id": self.auto_id,
         }
 
 
 @dataclass
 class VisualState:
-    """
-    Structured representation of the current
-    computer screen.
-    """
-
     screenshot_path: Optional[str] = None
 
     screen_width: Optional[int] = None
@@ -65,15 +63,10 @@ class VisualState:
         default_factory=dict
     )
 
-    def add_element(
-        self,
-        element: VisualElement,
-    ):
-
+    def add_element(self, element):
         self.elements.append(element)
 
     def to_dict(self) -> Dict[str, Any]:
-
         return {
             "screenshot_path": self.screenshot_path,
             "screen_width": self.screen_width,
@@ -90,10 +83,6 @@ class VisualState:
 
 
 class VisionReasoner:
-    """
-    Combines screenshot, OCR, OpenCV and
-    Windows UI information.
-    """
 
     def __init__(
         self,
@@ -101,19 +90,36 @@ class VisionReasoner:
         ocr_reader=None,
         vision_system=None,
         ui_tree=None,
+        target_window: Optional[str] = None,
     ):
-        self.screenshot_capture = screenshot_capture
+
+        self.screenshot_capture = (
+            screenshot_capture
+        )
 
         self.ocr_reader = ocr_reader
-
         self.vision_system = vision_system
-
         self.ui_tree = ui_tree
 
-        self.element_classifier = ElementClassifier()
-    # =========================================================
-    # Capture screen
-    # =========================================================
+        self.target_window = target_window
+
+        self.element_classifier = (
+            ElementClassifier()
+        )
+
+    # ---------------------------------------------------------
+    # Target window configuration
+    # ---------------------------------------------------------
+
+    def set_target_window(self, title: Optional[str]):
+        self.target_window = title
+
+    def get_target_window(self):
+        return self.target_window
+
+    # ---------------------------------------------------------
+    # Screenshot
+    # ---------------------------------------------------------
 
     def capture_screen(self):
 
@@ -124,14 +130,14 @@ class VisionReasoner:
 
         return self.screenshot_capture.capture()
 
-    # =========================================================
-    # Detect OCR elements
-    # =========================================================
+    # ---------------------------------------------------------
+    # OCR elements
+    # ---------------------------------------------------------
 
     def detect_text_elements(
         self,
-        screenshot_path: str,
-        state: VisualState,
+        screenshot_path,
+        state,
     ):
 
         if self.ocr_reader is None:
@@ -155,14 +161,13 @@ class VisionReasoner:
                     width=item["width"],
                     height=item["height"],
                     confidence=(
-                        item["confidence"] / 100.0
+                        item["confidence"]
+                        / 100.0
                     ),
                     source="ocr",
                 )
 
-                state.add_element(
-                    element
-                )
+                state.add_element(element)
 
             state.metadata[
                 "ocr_element_count"
@@ -174,22 +179,135 @@ class VisionReasoner:
                 "ocr_element_error"
             ] = str(error)
 
-    # =========================================================
-    # Analyze screenshot
-    # =========================================================
+    # ---------------------------------------------------------
+    # UI Automation elements
+    # ---------------------------------------------------------
+
+    def detect_uia_elements(
+        self,
+        state,
+    ):
+
+        if self.ui_tree is None:
+            return
+
+        try:
+
+            # -------------------------------------------------
+            # If a target window is configured, only inspect it
+            # -------------------------------------------------
+
+            if self.target_window:
+
+                windows = [
+                    self.ui_tree.get_window(
+                        title=self.target_window
+                    )
+                ]
+
+            else:
+
+                windows = (
+                    self.ui_tree.get_windows()
+                )
+
+            total_uia = 0
+
+            for window in windows:
+
+                try:
+
+                    window_title = (
+                        window.window_text()
+                    )
+
+                    if not window_title:
+                        continue
+
+                    elements = (
+                        self.ui_tree.get_ui_elements(
+                            window
+                        )
+                    )
+
+                    for item in elements:
+
+                        element = VisualElement(
+                            element_type=item[
+                                "element_type"
+                            ],
+
+                            text=item[
+                                "text"
+                            ],
+
+                            x=item["x"],
+                            y=item["y"],
+
+                            width=item[
+                                "width"
+                            ],
+
+                            height=item[
+                                "height"
+                            ],
+
+                            confidence=item[
+                                "confidence"
+                            ],
+
+                            source="uia",
+
+                            control_type=item.get(
+                                "control_type"
+                            ),
+
+                            auto_id=item.get(
+                                "auto_id"
+                            ),
+                        )
+
+                        state.add_element(
+                            element
+                        )
+
+                        total_uia += 1
+
+                except Exception:
+                    continue
+
+            state.metadata[
+                "uia_element_count"
+            ] = total_uia
+
+            state.metadata[
+                "uia_target_window"
+            ] = self.target_window
+
+        except Exception as error:
+
+            state.metadata[
+                "uia_element_error"
+            ] = str(error)
+
+    # ---------------------------------------------------------
+    # Screenshot analysis
+    # ---------------------------------------------------------
 
     def analyze_screenshot(
         self,
-        screenshot_path: str,
-    ) -> VisualState:
+        screenshot_path,
+    ):
 
         if self.vision_system is None:
             raise RuntimeError(
                 "Vision system is not configured."
             )
 
-        image = self.vision_system.load_image(
-            screenshot_path
+        image = (
+            self.vision_system.load_image(
+                screenshot_path
+            )
         )
 
         dimensions = (
@@ -205,7 +323,7 @@ class VisionReasoner:
         )
 
         # -----------------------------------------------------
-        # Basic OCR text
+        # OCR visible text
         # -----------------------------------------------------
 
         if self.ocr_reader is not None:
@@ -229,7 +347,7 @@ class VisionReasoner:
                 ] = str(error)
 
         # -----------------------------------------------------
-        # OCR visual elements
+        # OCR elements
         # -----------------------------------------------------
 
         self.detect_text_elements(
@@ -237,12 +355,28 @@ class VisionReasoner:
             state,
         )
 
+        # -----------------------------------------------------
+        # Classify OCR elements
+        # -----------------------------------------------------
+
         self.element_classifier.classify_all(
-            state.elements
-)
+            [
+                element
+                for element in state.elements
+                if element.source == "ocr"
+            ]
+        )
 
         # -----------------------------------------------------
-        # OpenCV analysis
+        # UI Automation
+        # -----------------------------------------------------
+
+        self.detect_uia_elements(
+            state
+        )
+
+        # -----------------------------------------------------
+        # Vision
         # -----------------------------------------------------
 
         try:
@@ -267,13 +401,13 @@ class VisionReasoner:
 
         return state
 
-    # =========================================================
-    # Windows UI information
-    # =========================================================
+    # ---------------------------------------------------------
+    # Window information
+    # ---------------------------------------------------------
 
     def add_window_information(
         self,
-        state: VisualState,
+        state,
     ):
 
         if self.ui_tree is None:
@@ -287,11 +421,15 @@ class VisionReasoner:
 
             state.window_titles = titles
 
-            if titles:
+            if self.target_window:
 
                 state.active_window = (
-                    titles[0]
+                    self.target_window
                 )
+
+            elif titles:
+
+                state.active_window = titles[0]
 
         except Exception as error:
 
@@ -301,80 +439,90 @@ class VisionReasoner:
 
         return state
 
-    # =========================================================
-    # Complete observation
-    # =========================================================
+    # ---------------------------------------------------------
+    # Full observation
+    # ---------------------------------------------------------
 
-    def observe(self) -> VisualState:
+    def observe(self):
 
         screenshot_path = (
             self.capture_screen()
         )
 
-        state = self.analyze_screenshot(
-            screenshot_path
+        state = (
+            self.analyze_screenshot(
+                screenshot_path
+            )
         )
 
-        state = self.add_window_information(
-            state
+        state = (
+            self.add_window_information(
+                state
+            )
         )
 
         return state
 
-    # =========================================================
-    # Human-readable summary
-    # =========================================================
+    # ---------------------------------------------------------
+    # Summary
+    # ---------------------------------------------------------
 
     def summarize(
         self,
-        state: VisualState,
-    ) -> str:
+        state,
+    ):
 
-        lines = []
-
-        lines.append(
-            "Visual State"
-        )
-
-        lines.append(
-            f"Screen: "
-            f"{state.screen_width}x"
-            f"{state.screen_height}"
-        )
+        lines = [
+            "Visual State",
+            (
+                f"Screen: "
+                f"{state.screen_width}x"
+                f"{state.screen_height}"
+            ),
+        ]
 
         if state.active_window:
 
             lines.append(
-                f"Active window: "
+                f"Target window: "
                 f"{state.active_window}"
             )
 
-        if state.window_titles:
-
-            lines.append(
-                "Visible windows: "
-                + ", ".join(
-                    state.window_titles
-                )
-            )
-
         if state.visible_text:
-
-            preview = (
-                state.visible_text[:500]
-            )
 
             lines.append(
                 "Visible text:"
             )
 
             lines.append(
-                preview
+                state.visible_text[:500]
             )
 
         lines.append(
-            f"Detected elements: "
-            f"{len(state.elements)}"
+            "OCR elements: "
+            + str(
+                state.metadata.get(
+                    "ocr_element_count",
+                    0,
+                )
+            )
+        )
+
+        lines.append(
+            "UIA elements: "
+            + str(
+                state.metadata.get(
+                    "uia_element_count",
+                    0,
+                )
+            )
+        )
+
+        lines.append(
+            "Total elements: "
+            + str(
+                len(state.elements)
+            )
         )
 
         return "\n".join(lines)

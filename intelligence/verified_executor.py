@@ -2,6 +2,10 @@ from typing import Optional, Dict, Any
 
 from execution.action_router import ActionRouter
 from perception.screenshot import ScreenshotCapture
+from perception.ocr import OCRReader
+from perception.vision import VisionSystem
+from perception.windows_ui_tree import WindowsUITree
+
 from intelligence.vision_reasoner import VisionReasoner
 from intelligence.verifier import ActionVerifier
 
@@ -19,10 +23,20 @@ class VerifiedActionExecutor:
           ↓
         Screenshot
           ↓
-        Vision
+        Vision + UIA
           ↓
         Verification
+
+    Native Windows UIA actions can use an
+    application-scoped observation by supplying
+    'window_title' in the action.
     """
+
+    UIA_ACTIONS = {
+        "uia_click_control",
+        "uia_invoke_control",
+        "uia_get_control_text",
+    }
 
     def __init__(
         self,
@@ -32,13 +46,71 @@ class VerifiedActionExecutor:
         verifier: Optional[ActionVerifier] = None,
     ):
         self.router = router or ActionRouter()
+
         self.screenshot_capture = (
-            screenshot_capture or ScreenshotCapture()
+            screenshot_capture
+            or ScreenshotCapture()
         )
+
         self.vision_reasoner = (
-            vision_reasoner or VisionReasoner()
+            vision_reasoner
+            or VisionReasoner(
+                screenshot_capture=self.screenshot_capture,
+                ocr_reader=OCRReader(),
+                vision_system=VisionSystem(),
+                ui_tree=WindowsUITree(),
+            )
         )
-        self.verifier = verifier or ActionVerifier()
+
+        self.verifier = (
+            verifier
+            or ActionVerifier()
+        )
+
+    # ---------------------------------------------------------
+    # Vision reasoner selection
+    # ---------------------------------------------------------
+
+    def _get_vision_reasoner(
+        self,
+        action: Dict[str, Any],
+    ) -> VisionReasoner:
+        """
+        Return the appropriate VisionReasoner for verification.
+
+        For native Windows UIA actions with a window_title,
+        verification is scoped to that application window.
+
+        For all other actions, the existing VisionReasoner
+        is reused unchanged.
+        """
+
+        action_type = action.get("action")
+
+        if (
+            action_type in self.UIA_ACTIONS
+            and action.get("window_title")
+        ):
+            target_window = action.get(
+                "window_title"
+            )
+
+            self.vision_reasoner.set_target_window(
+                target_window
+            )
+
+        else:
+            # Do not force application scoping for
+            # normal screenshot/PyAutoGUI/browser actions.
+            self.vision_reasoner.set_target_window(
+                None
+            )
+
+        return self.vision_reasoner
+
+    # ---------------------------------------------------------
+    # Execute + verify
+    # ---------------------------------------------------------
 
     def execute_and_verify(
         self,
@@ -46,44 +118,61 @@ class VerifiedActionExecutor:
         expected: Dict[str, Any],
     ) -> Dict[str, Any]:
 
-        # -------------------------------------------------
-        # Step 1: Execute action
-        # -------------------------------------------------
+        # -----------------------------------------------------
+        # 1. Execute action
+        # -----------------------------------------------------
 
-        action_result = self.router.execute(action)
+        action_result = self.router.execute(
+            action
+        )
 
         if not action_result.success:
+
             return {
                 "success": False,
                 "action_result": action_result,
                 "verification": None,
                 "screenshot": None,
-                "message": (
-                    "Action execution failed."
-                ),
+                "message": "Action execution failed.",
             }
 
-        # -------------------------------------------------
-        # Step 2: Capture new screen
-        # -------------------------------------------------
+        # -----------------------------------------------------
+        # 2. Capture fresh screenshot
+        # -----------------------------------------------------
 
         screenshot_path = (
             self.screenshot_capture.capture()
         )
 
-        # -------------------------------------------------
-        # Step 3: Analyze new screen
-        # -------------------------------------------------
+        # -----------------------------------------------------
+        # 3. Select observation scope
+        # -----------------------------------------------------
+
+        vision_reasoner = (
+            self._get_vision_reasoner(
+                action
+            )
+        )
+
+        # -----------------------------------------------------
+        # 4. Analyze fresh computer state
+        # -----------------------------------------------------
 
         visual_state = (
-            self.vision_reasoner.analyze_screenshot(
+            vision_reasoner.analyze_screenshot(
                 str(screenshot_path)
             )
         )
 
-        # -------------------------------------------------
-        # Step 4: Verify expected result
-        # -------------------------------------------------
+        visual_state = (
+            vision_reasoner.add_window_information(
+                visual_state
+            )
+        )
+
+        # -----------------------------------------------------
+        # 5. Select verification strategy
+        # -----------------------------------------------------
 
         verification_type = expected.get(
             "type",
@@ -98,6 +187,10 @@ class VerifiedActionExecutor:
         expected_element_type = expected.get(
             "element_type"
         )
+
+        # -----------------------------------------------------
+        # 6. Verify
+        # -----------------------------------------------------
 
         if verification_type == "present":
 
@@ -138,14 +231,14 @@ class VerifiedActionExecutor:
                     screenshot_path
                 ),
                 "message": (
-                    f"Unknown verification type: "
+                    "Unknown verification type: "
                     f"{verification_type}"
                 ),
             }
 
-        # -------------------------------------------------
-        # Step 5: Final result
-        # -------------------------------------------------
+        # -----------------------------------------------------
+        # 7. Return complete result
+        # -----------------------------------------------------
 
         return {
             "success": verification.success,
@@ -154,5 +247,6 @@ class VerifiedActionExecutor:
             "screenshot": str(
                 screenshot_path
             ),
+            "visual_state": visual_state,
             "message": verification.reason,
         }

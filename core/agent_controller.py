@@ -1,38 +1,42 @@
 from typing import Any, Dict, List, Optional
 
-from core.state_machine import AgentStateMachine
 from core.task_manager import TaskManager
+from core.observation import ObservationManager
+from core.state_machine import AgentStateMachine
+
+from intelligence.task_understanding import TaskUnderstanding
 from intelligence.planner import Planner
 from intelligence.decision_engine import DecisionEngine
 from intelligence.agent_executor import AgentExecutor
-from core.observation import ObservationManager
 
 
 class AgentController:
     """
-    Central coordinator for the Computer Use AI Agent.
+    Central controller for the computer-use agent.
 
-    Responsibilities:
+    Main pipeline:
 
-        Task
-          ↓
-        TaskManager
-          ↓
-        Planner
-          ↓
-        DecisionEngine
-          ↓
-        AgentExecutor
-          ↓
+        User Task
+            ↓
+        Task Understanding
+            ↓
+        Planning
+            ↓
+        Observation
+            ↓
+        Decision
+            ↓
+        Execution
+            ↓
         Verification / Recovery
-
-    This controller coordinates the existing components
-    without replacing their individual responsibilities.
+            ↓
+        Next Step
     """
 
     def __init__(
         self,
         task_manager: Optional[TaskManager] = None,
+        task_understanding: Optional[TaskUnderstanding] = None,
         planner: Optional[Planner] = None,
         decision_engine: Optional[DecisionEngine] = None,
         executor: Optional[AgentExecutor] = None,
@@ -40,60 +44,108 @@ class AgentController:
         observation_manager: Optional[ObservationManager] = None,
     ):
         self.task_manager = (
-            task_manager or TaskManager()
+            task_manager
+            if task_manager is not None
+            else TaskManager()
+        )
+
+        self.task_understanding = (
+            task_understanding
+            if task_understanding is not None
+            else TaskUnderstanding()
         )
 
         self.planner = (
-            planner or Planner()
+            planner
+            if planner is not None
+            else Planner()
         )
 
         self.decision_engine = (
-            decision_engine or DecisionEngine()
+            decision_engine
+            if decision_engine is not None
+            else DecisionEngine()
         )
 
         self.executor = (
-            executor or AgentExecutor()
+            executor
+            if executor is not None
+            else AgentExecutor()
         )
 
         self.state_machine = (
-            state_machine or AgentStateMachine()
+            state_machine
+            if state_machine is not None
+            else AgentStateMachine()
         )
 
         self.observation_manager = (
-            observation_manager or ObservationManager()
+            observation_manager
+            if observation_manager is not None
+            else ObservationManager()
         )
 
+        # ---------------------------------------------------------
+        # Runtime state
+        # ---------------------------------------------------------
+
         self.current_task = None
+
+        self.current_task_description: Optional[str] = None
+
+        self.current_understanding = None
+
         self.current_plan = None
-        self.execution_history: List[Dict[str, Any]] = []
+
         self.last_observation = None
 
-    def submit_task(
-        self,
-        task_description: str,
-    ) -> Any:
+        self.execution_history: List[
+            Dict[str, Any]
+        ] = []
+
+    # =============================================================
+    # TASK SUBMISSION
+    # =============================================================
+
+    def submit_task(self, description: str):
         """
         Create and register a new task.
         """
 
-        if not task_description:
+        if not isinstance(description, str):
+            raise ValueError(
+                "Task description must be a string."
+            )
+
+        description = description.strip()
+
+        if not description:
             raise ValueError(
                 "Task description cannot be empty."
             )
 
-        task = self.task_manager.create_task(
-            task_description
+        self.current_task = (
+            self.task_manager.create_task(
+                description
+            )
         )
 
-        self.current_task = task
+        self.current_task_description = description
+
+        self.current_understanding = None
         self.current_plan = None
+        self.last_observation = None
         self.execution_history = []
 
-        return task
+        return self.current_task
 
-    def create_plan(self) -> Any:
+    # =============================================================
+    # TASK UNDERSTANDING
+    # =============================================================
+
+    def understand_task(self) -> Any:
         """
-        Generate a plan for the current task.
+        Understand the current natural-language task.
         """
 
         if self.current_task is None:
@@ -101,253 +153,598 @@ class AgentController:
                 "No active task. Call submit_task() first."
             )
 
-        description = getattr(
-            self.current_task,
-            "description",
-            None,
-        )
+        description = self.current_task_description
 
-        if description is None:
+        if not description:
             description = getattr(
                 self.current_task,
-                "title",
-                str(self.current_task),
+                "description",
+                None,
             )
 
-        self.current_plan = (
-            self.planner.create_plan(
+        if not description:
+            raise RuntimeError(
+                "Active task has no description."
+            )
+
+        understanding = (
+            self.task_understanding.understand(
                 description
             )
         )
 
-        return self.current_plan
+        if not getattr(
+            understanding,
+            "success",
+            False,
+        ):
+            raise RuntimeError(
+                "Task understanding failed: "
+                + getattr(
+                    understanding,
+                    "message",
+                    "Unknown error.",
+                )
+            )
 
+        self.current_understanding = understanding
 
-    def observe(self) -> Any:
-        """
-        Capture and analyze the current Windows screen.
-        """
-        self.last_observation = (
-            self.observation_manager.observe()
-        )
+        return understanding
 
-        return self.last_observation
+    # =============================================================
+    # PLAN CREATION
+    # =============================================================
 
-    def get_last_observation(self) -> Any:
+    def create_plan(self) -> Any:
         """
-        Return the most recent screen observation.
-        """
-        return self.last_observation
-
-    def get_next_action(self, observation: Any = None) -> Any:
-        """
-        Observe the current task state and select the next action.
+        Create an executable plan for the current task.
         """
 
         if self.current_task is None:
-            raise RuntimeError("No active task.")
+            raise RuntimeError(
+                "No active task. Call submit_task() first."
+            )
+
+        if self.current_understanding is None:
+            self.understand_task()
+
+        description = self.current_task_description
+
+        if not description:
+            description = getattr(
+                self.current_task,
+                "description",
+                None,
+            )
+
+        if not description:
+            raise RuntimeError(
+                "Active task has no description."
+            )
+
+        understood_steps = getattr(
+            self.current_understanding,
+            "steps",
+            [],
+        )
+
+        plan = self.planner.create_plan(
+            description,
+            understood_steps,
+        )
+
+        if not getattr(
+            plan,
+            "success",
+            True,
+        ):
+            raise RuntimeError(
+                "Planning failed: "
+                + getattr(
+                    plan,
+                    "message",
+                    "Unknown error.",
+                )
+            )
+
+        self.current_plan = plan
+
+        plan_steps = getattr(
+            plan,
+            "steps",
+            [],
+        )
+
+        self.task_manager.add_plan_steps(
+            self.current_task.task_id,
+            plan_steps,
+        )
+
+        return plan
+
+    # =============================================================
+    # OBSERVATION
+    # =============================================================
+
+    def observe(self):
+        """
+        Capture and analyze the current Windows screen.
+        """
+
+        observation = (
+            self.observation_manager.observe()
+        )
+
+        self.last_observation = observation
+
+        return observation
+
+    # =============================================================
+    # LAST OBSERVATION
+    # =============================================================
+
+    def get_last_observation(self):
+        """
+        Return the latest observation.
+        """
+
+        return self.last_observation
+
+    # =============================================================
+    # CONVERT OBSERVATION FOR DECISION ENGINE
+    # =============================================================
+
+    def _observation_to_dict(
+        self,
+        observation: Any,
+    ) -> Dict[str, Any]:
+        """
+        Convert a VisualState or dictionary observation into
+        the dictionary format expected by DecisionEngine.
+        """
+
+        if observation is None:
+            return {}
+
+        # Already a dictionary.
+        if isinstance(observation, dict):
+            return observation
+
+        # VisualState or similar object with to_dict().
+        if hasattr(observation, "to_dict"):
+            try:
+                result = observation.to_dict()
+
+                if isinstance(result, dict):
+                    return result
+
+            except Exception:
+                pass
+
+        # Explicitly construct a useful computer state from
+        # VisualState-style objects.
+        result: Dict[str, Any] = {}
+
+        attributes = [
+            "screenshot_path",
+            "screen_width",
+            "screen_height",
+            "active_window",
+            "window_titles",
+            "visible_text",
+            "elements",
+            "metadata",
+        ]
+
+        for attribute in attributes:
+            if hasattr(
+                observation,
+                attribute,
+            ):
+                value = getattr(
+                    observation,
+                    attribute,
+                )
+
+                # Convert Path objects into strings.
+                if attribute == "screenshot_path":
+                    value = str(value)
+
+                result[attribute] = value
+
+        return result
+
+    # =============================================================
+    # GET NEXT ACTION
+    # =============================================================
+
+    def get_next_action(
+        self,
+        observation: Optional[Any] = None,
+    ):
+        """
+        Determine the next action using the real DecisionEngine API.
+
+        DecisionEngine contract:
+
+            choose_action(
+                task,
+                current_step,
+                computer_state,
+                history
+            )
+        """
+
+        if self.current_task is None:
+            raise RuntimeError(
+                "No active task. Call submit_task() first."
+            )
 
         if self.current_plan is None:
             raise RuntimeError(
                 "No active plan. Call create_plan() first."
             )
 
-        # Use the supplied observation, or observe the screen.
-        if observation is None:
-            observation = self.observe()
+        # ---------------------------------------------------------
+        # Store supplied observation
+        # ---------------------------------------------------------
 
-        # Convert VisualState to a dictionary for DecisionEngine.
-        if hasattr(observation, "to_dict"):
-            computer_state = observation.to_dict()
-        elif isinstance(observation, dict):
-            computer_state = observation
-        else:
-            computer_state = {
-                "observation": observation
-            }
+        if observation is not None:
+            self.last_observation = observation
 
-        # Extract the task description.
-        task_description = getattr(
-            self.current_task,
-            "description",
-            None,
+        current_observation = (
+            observation
+            if observation is not None
+            else self.last_observation
         )
 
-        if task_description is None:
+        # ---------------------------------------------------------
+        # Current plan step
+        # ---------------------------------------------------------
+
+        current_step = (
+            self._get_current_plan_step()
+        )
+
+        if current_step is None:
+            return None
+
+        # ---------------------------------------------------------
+        # Original user task
+        # ---------------------------------------------------------
+
+        task_description = (
+            self.current_task_description
+        )
+
+        if not task_description:
             task_description = getattr(
                 self.current_task,
-                "title",
-                str(self.current_task),
+                "description",
+                "",
             )
 
-        # Extract the current planned step.
-        current_step = self._get_current_plan_step()
+        if not isinstance(
+            task_description,
+            str,
+        ):
+            task_description = str(
+                task_description
+            )
 
-        decision = self.decision_engine.choose_action(
-            task=task_description,
-            current_step=current_step,
-            computer_state=computer_state,
-            history=self.execution_history,
+        # ---------------------------------------------------------
+        # Convert observation to computer state
+        # ---------------------------------------------------------
+
+        computer_state = (
+            self._observation_to_dict(
+                current_observation
+            )
+        )
+
+        # ---------------------------------------------------------
+        # Decision history
+        # ---------------------------------------------------------
+
+        history = self.execution_history
+
+        # ---------------------------------------------------------
+        # IMPORTANT:
+        #
+        # DecisionEngine expects:
+        #
+        #   task
+        #   current_step
+        #   computer_state
+        #   history
+        #
+        # Do NOT pass current_step as task.
+        # ---------------------------------------------------------
+
+        decision = (
+            self.decision_engine.choose_action(
+                task_description,
+                current_step,
+                computer_state,
+                history,
+            )
         )
 
         return decision
 
+    # =============================================================
+    # EXECUTE ACTION
+    # =============================================================
+
     def execute_action(
         self,
         action: Dict[str, Any],
-        expected: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        expected: Optional[Dict[str, Any]] = None,
+    ):
         """
-        Execute an action through the verified
-        execution and recovery pipeline.
+        Execute one action through AgentExecutor.
         """
 
-        result = self.executor.execute(
-            action=action,
-            expected=expected,
-        )
+        if action is None:
+            raise ValueError(
+                "Action cannot be None."
+            )
 
-        self.execution_history.append({
+        if expected is not None:
+            result = self.executor.execute(
+                action=action,
+                expected=expected,
+            )
+        else:
+            result = self.executor.execute(
+                action=action,
+            )
+
+        history_entry = {
             "action": action,
-            "expected": expected,
             "result": result,
-        })
+        }
+
+        if expected is not None:
+            history_entry["expected"] = expected
+
+        self.execution_history.append(
+            history_entry
+        )
 
         return result
 
-    def run_step(
-        self,
-        observation: Any = None,
-        expected: Optional[
-            Dict[str, Any]
-        ] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute one agent step.
+    # =============================================================
+    # RUN ONE COMPLETE STEP
+    # =============================================================
 
-        The step consists of:
-
-            Decide → Execute → Verify → Recover
+    def run_step(self):
         """
+        Run one complete:
+
+            Observe → Decide → Execute
+
+        cycle.
+
+        AgentExecutor handles verification and recovery.
+        """
+
+        if self.current_task is None:
+            raise RuntimeError(
+                "No active task. Call submit_task() first."
+            )
+
+        if self.current_plan is None:
+            raise RuntimeError(
+                "No active plan. Call create_plan() first."
+            )
+
+        # ---------------------------------------------------------
+        # 1. Observe
+        # ---------------------------------------------------------
+
+        observation = self.observe()
+
+        # ---------------------------------------------------------
+        # 2. Decide
+        # ---------------------------------------------------------
 
         decision = self.get_next_action(
             observation=observation
         )
 
-        if hasattr(decision, "action"):
-            action = decision.action
-        elif isinstance(decision, dict):
-            action = decision.get(
-                "action",
-                decision,
-            )
-        else:
-            action = decision
+        if decision is None:
+            return {
+                "success": False,
+                "message": "No action available.",
+                "observation": observation,
+                "decision": None,
+                "action": None,
+                "expected": None,
+                "result": None,
+            }
 
-        if expected is None:
+        # ---------------------------------------------------------
+        # 3. Extract decision action
+        # ---------------------------------------------------------
 
-            if hasattr(decision, "expected"):
-                expected = decision.expected
-
-            elif (
-                isinstance(decision, dict)
-                and "expected" in decision
-            ):
-                expected = decision["expected"]
-
-            else:
-                expected = {}
-
-        result = self.execute_action(
-            action=action,
-            expected=expected,
+        action = getattr(
+            decision,
+            "action",
+            None,
         )
 
+        expected = getattr(
+            decision,
+            "expected",
+            None,
+        )
+
+        # ---------------------------------------------------------
+        # Support dictionary decisions
+        # ---------------------------------------------------------
+
+        if isinstance(
+            decision,
+            dict,
+        ):
+            action = decision.get(
+                "action"
+            )
+
+            expected = decision.get(
+                "expected"
+            )
+
+            if "action" in decision:
+                action = decision
+
+        # ---------------------------------------------------------
+        # Validate action
+        # ---------------------------------------------------------
+
+        if action is None:
+            return {
+                "success": False,
+                "message": (
+                    "Decision did not contain an action."
+                ),
+                "observation": observation,
+                "decision": decision,
+                "action": None,
+                "expected": expected,
+                "result": None,
+            }
+
+        # ---------------------------------------------------------
+        # 4. Execute
+        # ---------------------------------------------------------
+
+        result = self.execute_action(
+            action,
+            expected,
+        )
+
+        # ---------------------------------------------------------
+        # Determine success
+        # ---------------------------------------------------------
+
+        if isinstance(
+            result,
+            dict,
+        ):
+            success = result.get(
+                "success",
+                True,
+            )
+        else:
+            success = getattr(
+                result,
+                "success",
+                True,
+            )
+
+        # ---------------------------------------------------------
+        # Return complete cycle
+        # ---------------------------------------------------------
+
         return {
+            "success": success,
+            "observation": observation,
             "decision": decision,
             "action": action,
             "expected": expected,
             "result": result,
         }
 
-    def get_execution_history(
-        self,
-    ) -> List[Dict[str, Any]]:
+    # =============================================================
+    # EXECUTION HISTORY
+    # =============================================================
+
+    def get_execution_history(self):
         """
-        Return the execution trace for the current task.
+        Return execution history for the current task.
         """
 
-        return list(
-            self.execution_history
-        )
+        return self.execution_history
+
+    # =============================================================
+    # RESET
+    # =============================================================
 
     def reset(self):
+        """
+        Reset the controller to an empty state.
+        """
+
         self.current_task = None
+        self.current_task_description = None
+        self.current_understanding = None
         self.current_plan = None
-        self.execution_history = []
         self.last_observation = None
+        self.execution_history = []
 
+    # =============================================================
+    # CURRENT PLAN STEP
+    # =============================================================
 
-    def _get_current_plan_step(self) -> Dict[str, Any]:
+    def _get_current_plan_step(self):
         """
-        Extract the current step from the active plan.
+        Return the currently active plan step.
 
-        Supports the existing planner's plan representation
-        without forcing the planner to change.
+        Supports both:
+
+        1. PlanResult objects:
+               plan.steps
+
+        2. Dictionary plans:
+               plan["steps"]
         """
 
-        plan = self.current_plan
+        if self.current_plan is None:
+            return None
 
-        if plan is None:
-            raise RuntimeError("No active plan.")
+        # ---------------------------------------------------------
+        # Extract steps
+        # ---------------------------------------------------------
 
-        # Plan object containing a steps attribute.
-        steps = getattr(plan, "steps", None)
-
-        if steps is None and isinstance(plan, dict):
-            steps = plan.get("steps")
-
-        if steps is None:
-            raise RuntimeError(
-                "Active plan does not contain steps."
+        if isinstance(
+            self.current_plan,
+            dict,
+        ):
+            steps = self.current_plan.get(
+                "steps"
+            )
+        else:
+            steps = getattr(
+                self.current_plan,
+                "steps",
+                None,
             )
 
         if not steps:
-            raise RuntimeError(
-                "Active plan contains no steps."
-            )
+            return None
 
-        # For now, use the first incomplete step.
-        for step in steps:
+        # ---------------------------------------------------------
+        # Current step index
+        # ---------------------------------------------------------
 
-            if isinstance(step, dict):
-                completed = step.get(
-                    "completed",
-                    step.get("status") == "completed",
-                )
-
-                if not completed:
-                    return step
-
-            else:
-                completed = getattr(
-                    step,
-                    "completed",
-                    False,
-                )
-
-                if not completed:
-                    if hasattr(step, "to_dict"):
-                        return step.to_dict()
-
-                    if hasattr(step, "__dict__"):
-                        return dict(step.__dict__)
-
-                    return {
-                        "description": str(step),
-                        "action": str(step),
-                    }
-
-        raise RuntimeError(
-            "All planned steps have been completed."
+        index = getattr(
+            self.current_task,
+            "current_step_index",
+            0,
         )
+
+        if not isinstance(
+            index,
+            int,
+        ):
+            index = 0
+
+        if index < 0:
+            index = 0
+
+        if index >= len(steps):
+            return None
+
+        return steps[index]

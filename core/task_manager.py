@@ -68,6 +68,78 @@ class TaskManager:
 
         return step
 
+    def add_plan_steps(
+        self,
+        task_id: str,
+        plan_steps: List[Dict[str, Any]],
+    ) -> List[TaskStep]:
+        """
+        Add planner-generated steps to an existing task.
+
+        Each planner step is converted into a TaskStep while
+        preserving the action parameters and expected result.
+        """
+
+        task = self.get_task(task_id)
+
+        if task is None:
+            raise ValueError(
+                f"Task not found: {task_id}"
+            )
+
+        if not isinstance(plan_steps, list):
+            raise ValueError(
+                "plan_steps must be a list."
+            )
+
+        created_steps = []
+
+        for plan_step in plan_steps:
+
+            if not isinstance(plan_step, dict):
+                continue
+
+            description = plan_step.get(
+                "description",
+                "",
+            )
+
+            action = plan_step.get(
+                "action",
+            )
+
+            parameters = plan_step.get(
+                "parameters",
+                {},
+            )
+
+            expected_result = plan_step.get(
+                "expected_result",
+            )
+
+            if not description or not action:
+                continue
+
+            action_data = {
+                "action": action,
+                "parameters": parameters,
+            }
+
+            if expected_result is not None:
+                action_data["expected_result"] = (
+                    expected_result
+                )
+
+            step = self.add_step(
+                task_id=task_id,
+                description=description,
+                action=action_data,
+            )
+
+            created_steps.append(step)
+
+        return created_steps
+
     def get_current_step(
         self,
         task_id: str,

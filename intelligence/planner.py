@@ -65,6 +65,9 @@ Rules:
         "click_control",
         "type_into_control",
         "get_control_text",
+        "uia_click_control",
+        "uia_invoke_control",
+        "uia_get_control_text",
         "click",
         "double_click",
         "right_click",
@@ -224,6 +227,15 @@ Rules:
 
             "get_control_text":
                 "The requested control text is retrieved.",
+
+            "uia_click_control":
+                "The requested native Windows UI control is clicked.",
+
+            "uia_invoke_control":
+                "The requested native Windows UI control is invoked.",
+
+            "uia_get_control_text":
+                "The requested native Windows UI control text is retrieved.",
 
             "click":
                 "The requested screen location is clicked.",

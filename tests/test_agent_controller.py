@@ -5,6 +5,7 @@ from core.agent_controller import AgentController
 
 def create_controller():
     task_manager = MagicMock()
+    task_understanding = MagicMock()
     planner = MagicMock()
     decision_engine = MagicMock()
     executor = MagicMock()
@@ -12,6 +13,7 @@ def create_controller():
 
     controller = AgentController(
         task_manager=task_manager,
+        task_understanding=task_understanding,
         planner=planner,
         decision_engine=decision_engine,
         executor=executor,
@@ -21,6 +23,7 @@ def create_controller():
     return (
         controller,
         task_manager,
+        task_understanding,
         planner,
         decision_engine,
         executor,
@@ -61,18 +64,112 @@ def test_submit_task():
     )
 
 
+def test_understand_task():
+    (
+        controller,
+        _,
+        task_understanding,
+        *_,
+    ) = create_controller()
+
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.task_description = "Open Notepad"
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
+
+    task_understanding.understand.return_value = (
+        understanding
+    )
+
+    controller.submit_task("Open Notepad")
+
+    result = controller.understand_task()
+
+    assert result == understanding
+    assert controller.current_understanding == (
+        understanding
+    )
+
+    task_understanding.understand.assert_called_once_with(
+        "Open Notepad"
+    )
+
+
 def test_create_plan():
     (
         controller,
-        task_manager,
+        _,
+        task_understanding,
         planner,
         *_,
     ) = create_controller()
 
-    task = MagicMock()
-    task.description = "Open Notepad"
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
 
-    task_manager.create_task.return_value = task
+    task_understanding.understand.return_value = (
+        understanding
+    )
+
+    plan = MagicMock()
+    planner.create_plan.return_value = plan
+
+    controller.submit_task("Open Notepad")
+
+    controller.understand_task()
+
+    result = controller.create_plan()
+
+    assert result == plan
+    assert controller.current_plan == plan
+
+    planner.create_plan.assert_called_once_with(
+        "Open Notepad",
+        understanding.steps,
+    )
+
+
+def test_create_plan_runs_understanding_automatically():
+    (
+        controller,
+        _,
+        task_understanding,
+        planner,
+        *_,
+    ) = create_controller()
+
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
+
+    task_understanding.understand.return_value = (
+        understanding
+    )
 
     plan = MagicMock()
     planner.create_plan.return_value = plan
@@ -82,9 +179,74 @@ def test_create_plan():
     result = controller.create_plan()
 
     assert result == plan
-    assert controller.current_plan == plan
+    assert controller.current_understanding == (
+        understanding
+    )
 
-    planner.create_plan.assert_called_once()
+    task_understanding.understand.assert_called_once_with(
+        "Open Notepad"
+    )
+
+    planner.create_plan.assert_called_once_with(
+        "Open Notepad",
+        understanding.steps,
+    )
+
+
+def test_create_plan_populates_task_manager():
+    (
+        controller,
+        task_manager,
+        task_understanding,
+        planner,
+        *_,
+    ) = create_controller()
+
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
+
+    task_understanding.understand.return_value = (
+        understanding
+    )
+
+    plan = MagicMock()
+    plan.success = True
+    plan.steps = [
+        {
+            "step_number": 1,
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+            "expected_result": "Notepad is open.",
+        }
+    ]
+
+    planner.create_plan.return_value = plan
+
+    task = MagicMock()
+    task.description = "Open Notepad"
+
+    task_manager.create_task.return_value = task
+
+    controller.submit_task("Open Notepad")
+
+    controller.create_plan()
+
+    task_manager.add_plan_steps.assert_called_once_with(
+        task.task_id,
+        plan.steps,
+    )
 
 
 def test_create_plan_without_task():
@@ -136,6 +298,7 @@ def test_get_next_action():
     (
         controller,
         task_manager,
+        task_understanding,
         planner,
         decision_engine,
         *_,
@@ -145,6 +308,22 @@ def test_get_next_action():
     task.description = "Open Notepad"
 
     task_manager.create_task.return_value = task
+
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
+
+    task_understanding.understand.return_value = (
+        understanding
+    )
 
     plan = MagicMock()
     plan.steps = [
@@ -182,6 +361,7 @@ def test_get_next_action():
 def test_execute_action():
     (
         controller,
+        _,
         _,
         _,
         _,
@@ -226,6 +406,7 @@ def test_run_step():
     (
         controller,
         task_manager,
+        task_understanding,
         planner,
         decision_engine,
         executor,
@@ -236,6 +417,22 @@ def test_run_step():
     task.description = "Open Notepad"
 
     task_manager.create_task.return_value = task
+
+    understanding = MagicMock()
+    understanding.success = True
+    understanding.steps = [
+        {
+            "description": "Open Notepad",
+            "action": "open_application",
+            "parameters": {
+                "executable": "notepad.exe"
+            },
+        }
+    ]
+
+    task_understanding.understand.return_value = (
+        understanding
+    )
 
     plan = MagicMock()
     plan.steps = [
@@ -298,6 +495,7 @@ def test_get_execution_history():
         _,
         _,
         _,
+        _,
         executor,
         _,
     ) = create_controller()
@@ -334,6 +532,7 @@ def test_reset():
     (
         controller,
         task_manager,
+        _,
         planner,
         _,
         _,
@@ -349,7 +548,8 @@ def test_reset():
     planner.create_plan.return_value = plan
 
     controller.submit_task("Open Notepad")
-    controller.create_plan()
+
+    controller.current_plan = plan
 
     controller.execution_history.append(
         {
